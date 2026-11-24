@@ -1,0 +1,32 @@
+# Copy to receiver.toml and edit. See README.md.
+
+# Where to listen. Put a tunnel (ngrok) or your HTTPS reverse proxy in front:
+# Broomstack only sends stream keys over HTTPS.
+listen = "127.0.0.1:8800"
+
+# The endpoint's signing secret, shown once when you add it on Broomstack's
+# Webhooks page. Better: leave this out and set BROOMSTACK_WEBHOOK_SECRET.
+# secret = "..."
+
+# Remembers which deliveries it has handled (ids only, never a payload).
+state_dir = "state"
+
+# One section per sheet this PC streams, by the sheet's label in Broomstack.
+# Use [sheets."*"] for "whatever sheet the webhook names".
+[sheets.A]
+pusher = "ffmpeg"
+# Without "input", ffmpeg sends a test pattern and a tone: handy for a first
+# run. A USB camera on macOS, for example:
+#   input = ["-f", "avfoundation", "-framerate", "30", "-video_size", "1280x720", "-i", "0:0"]
+# On Linux:
+#   input = ["-f", "v4l2", "-framerate", "30", "-video_size", "1280x720", "-i", "/dev/video0",
+#            "-f", "alsa", "-i", "default"]
+# On Windows:
+#   input = ["-f", "dshow", "-i", "video=Your Camera:audio=Your Microphone"]
+
+# Or let OBS do it (pip install "broomstack-receiver[obs]"):
+# [sheets.B]
+# pusher = "obs"
+# obs_host = "localhost"
+# obs_port = 4455
+# obs_password = "..."

@@ -1,0 +1,39 @@
+{
+  "event": "game.started",
+  "occurred_at": "2026-11-24T23:02:11.482193+00:00",
+  "facility": {"id": 1, "slug": "riverside", "name": "Riverside Curling Center"},
+  "sheet": {"id": 3, "label": "A"},
+  "game": {
+    "id": 512,
+    "kind": "league",
+    "date": "2026-11-24",
+    "start_time": "18:00:00",
+    "end_time": "20:00:00",
+    "home_team": {"id": 81, "name": "Smith", "stone_color": "Red", "stone_color_hex": "#C8102E"},
+    "away_team": {"id": 82, "name": "Jones", "stone_color": "Yellow", "stone_color_hex": "#F2C200"},
+    "home_score": null,
+    "away_score": null
+  },
+  "competition": {
+    "kind": "league",
+    "id": 7,
+    "name": "Tuesday Night",
+    "slug": "tuesday",
+    "club": {"id": 2, "name": "Riverside Curling Club", "short_name": "RCC"}
+  },
+  "league": {
+    "kind": "league",
+    "id": 7,
+    "name": "Tuesday Night",
+    "slug": "tuesday",
+    "club": {"id": 2, "name": "Riverside Curling Club", "short_name": "RCC"}
+  },
+  "stream": {
+    "id": 40,
+    "part": 1,
+    "ingest_url": "rtmp://a.rtmp.youtube.com/live2",
+    "stream_key": "xxxx-xxxx-xxxx-xxxx-xxxx",
+    "watch_url": "https://www.youtube.com/watch?v=abc123",
+    "overlays": null
+  }
+}

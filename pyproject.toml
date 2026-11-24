@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "broomstack-receiver"
+version = "0.1.0"
+description = "Reference receiver for Broomstack's streaming webhooks: streams a curling sheet's camera to YouTube when a game starts."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+obs = ["obsws-python>=1.7"]
+test = ["pytest>=8"]
+
+[project.scripts]
+broomstack-receiver = "broomstack_receiver.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
