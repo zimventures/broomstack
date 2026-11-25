@@ -114,10 +114,12 @@ class FfmpegPusher(Pusher):
         with self._lock:
             self._stop_locked()
             os.makedirs(self.frame_dir, exist_ok=True)
-            # Never the last push's frame: it may be another game's.
+            # Never the last push's frame: it may be another game's. A frame
+            # that can't be removed (open elsewhere, as Windows forbids) must
+            # not stop the push; the age limit retires it soon anyway.
             try:
                 os.remove(self.snapshot_path)
-            except FileNotFoundError:
+            except OSError:
                 pass
             self._last_frame = None
             try:
