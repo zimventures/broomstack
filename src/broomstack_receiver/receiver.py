@@ -53,16 +53,42 @@ def _when(payload):
 class SheetWorker:
     """Runs one sheet's starts and stops, one at a time, in order."""
 
-    def __init__(self, label, pusher, on_failure):
+    def __init__(self, label, pusher, on_failure, closing=None):
         self.label = label
         self.pusher = pusher
         self.on_failure = on_failure
+        #: Set when the receiver shuts down: queued work is dropped, so no
+        #: push starts after the sheet was stopped, and nothing is reported.
+        self.closing = closing or threading.Event()
         self.last = None  # occurred_at of the last event acted on
+        #: Where to report a failure of the push now running: set on this
+        #: worker's own thread just before that push starts, cleared when it
+        #: stops. Never the next game's, which may be waiting in the queue
+        #: (code review on PR #2).
+        self.report_url = None
+
         self._queue = queue.Queue()
         threading.Thread(target=self._run, name=f'sheet-{label}', daemon=True).start()
 
     def submit(self, action, *args):
         self._queue.put((action, args))
+
+    def start(self, report_url, ingest_url, stream_key):
+        """Queued: start a push, and report its failures to the start that
+        asked for it. Its own death mid-game goes to *its* URL, bound here,
+        even if the next game's start has begun by then (code review on PR #2)."""
+        if self.closing.is_set():
+            return
+        self.report_url = report_url
+        self.pusher.on_exit = lambda why, url=report_url: self.on_failure(
+            self.label, why, url
+        )
+        self.pusher.start(ingest_url, stream_key)
+
+    def stop(self):
+        """Queued: stop the push; nothing to report to until the next."""
+        self.report_url = None
+        self.pusher.stop()
 
     def drain(self):
         """Wait until everything submitted so far has run (tests, shutdown)."""
@@ -72,24 +98,52 @@ class SheetWorker:
         while True:
             action, args = self._queue.get()
             try:
+                if self.closing.is_set():
+                    continue  # shutting down: nothing queued runs any more
                 action(*args)
             except Exception as error:  # noqa: BLE001 - one bad push mustn't stop the sheet
                 why = secrets.scrub(str(error))
                 logger.error('Sheet %s: %s', self.label, why)
-                self.on_failure(self.label, why)
+                self.on_failure(self.label, why, self.report_url)
             finally:
                 self._queue.task_done()
 
 
 class Receiver:
-    def __init__(self, pushers, *, seen=None, on_failure=None):
-        """``pushers``: sheet label (or ``'*'`` for any) to a Pusher."""
+    def __init__(self, pushers, *, seen=None, on_failure=None, secret=''):
+        """``pushers``: sheet label (or ``'*'`` for any) to a Pusher.
+        ``secret`` signs failure reports to Broomstack."""
         self.seen = seen if seen is not None else Seen()
-        self.on_failure = on_failure or report_failure
+        self.secret = secret
+        self.closing = threading.Event()
+        # Workers call (sheet, why, url). A custom ``on_failure`` keeps the
+        # documented two-argument form; only our own reporting needs the URL
+        # (code review on PR #2).
+        if on_failure is None:
+            self.on_failure = self.report_failure
+        else:
+            self.on_failure = lambda sheet, why, url=None: on_failure(sheet, why)
         self.workers = {
-            label: SheetWorker(label, pusher, self.on_failure)
+            label: SheetWorker(label, pusher, self.on_failure, self.closing)
             for label, pusher in pushers.items()
         }
+
+    def report_failure(self, sheet, why, report_url=None):
+        """A push that failed after Broomstack was answered: logged, and
+        reported to its start's ``report_url`` so the facility's admins
+        hear. Not while shutting down: a Ctrl-C reaches ffmpeg too."""
+        from .reporter import send_later
+
+        why = secrets.scrub(why)
+        if self.closing.is_set():
+            logger.info('Sheet %s: stopped while shutting down: %s', sheet, why)
+            return
+        logger.error('Sheet %s: the push failed: %s', sheet, why)
+        worker = self.workers.get(sheet)
+        url = report_url or (worker.report_url if worker is not None else None)
+        if not url or not self.secret:
+            return
+        send_later(url, self.secret, why)
 
     def worker_for(self, payload):
         label = ((payload.get('sheet') or {}).get('label')) or None
@@ -122,7 +176,7 @@ class Receiver:
 
         if event == 'game.finished':
             worker.last = when or worker.last
-            worker.submit(worker.pusher.stop)
+            worker.submit(worker.stop)
             logger.info('Sheet %s: game finished, stopping', sheet)
             return Outcome(200, 'stopping')
 
@@ -131,7 +185,7 @@ class Receiver:
             # No broadcast for this game: nothing to push to. Stop a push
             # left over from a game whose finish never arrived.
             worker.last = when or worker.last
-            worker.submit(worker.pusher.stop)
+            worker.submit(worker.stop)
             logger.info('Sheet %s: %s without a stream, not pushing', sheet, event)
             return Outcome(200, 'no stream to push')
 
@@ -141,7 +195,8 @@ class Receiver:
             return Outcome(503, f'cannot stream: {problem}')
 
         worker.last = when or worker.last
-        worker.submit(worker.pusher.start, *target)
+        report_url = (payload.get('stream') or {}).get('report_url') or None
+        worker.submit(worker.start, report_url, *target)
         part = (payload.get('stream') or {}).get('part')
         logger.info('Sheet %s: %s, pushing part %s', sheet, event, part)
         return Outcome(202, 'starting')
@@ -162,13 +217,3 @@ def snapshot(receiver, payload):
     if frame is None:
         return 503, 'text/plain; charset=utf-8', b'no frame right now\n'
     return 200, frame[0], frame[1]
-
-
-def report_failure(sheet, why):
-    """A push that failed after Broomstack was answered.
-
-    For now it's logged. Broomstack is adding a signed callback for these
-    reports, so the facility's admins hear about them; this is where the
-    receiver will call it.
-    """
-    logger.error('Sheet %s: the push failed: %s', sheet, why)

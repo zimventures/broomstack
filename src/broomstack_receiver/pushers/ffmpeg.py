@@ -134,15 +134,21 @@ class FfmpegPusher(Pusher):
                 # The message names the program, not the command line.
                 raise RuntimeError(f'could not run ffmpeg: {error.strerror}') from None
             process = self._process
-        threading.Thread(target=self._relay, args=(process,), daemon=True).start()
+            # This push's own callback, taken now: the next game's start
+            # replaces on_exit before it stops this one (code review on PR #2).
+            on_exit = self.on_exit
+        threading.Thread(target=self._relay, args=(process, on_exit), daemon=True).start()
         logger.info('ffmpeg started (pid %s)', process.pid)
 
-    def _relay(self, process):
+    def _relay(self, process, on_exit):
         for line in process.stderr:
             logger.warning('ffmpeg: %s', secrets.scrub(line.rstrip()))
         code = process.wait()
-        if code not in (0, -15, 255):  # 255/-15: stopped by us
+        # Still the current push: nobody stopped it, it ended on its own
+        # (a stop clears _process first). That's a failure to report.
+        if process is self._process:
             logger.error('ffmpeg exited with %s', code)
+            on_exit(f'ffmpeg stopped unexpectedly (exit {code})')
 
     def stop(self):
         with self._lock:
