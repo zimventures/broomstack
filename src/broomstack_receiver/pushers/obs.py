@@ -30,7 +30,7 @@ class ObsPusher(Pusher):
         self.password = config.get('obs_password', '')
         self.timeout = float(config.get('obs_timeout', 3))
 
-    def _client(self):
+    def _client(self, timeout=None):
         try:
             import obsws_python
         except ImportError:
@@ -38,7 +38,10 @@ class ObsPusher(Pusher):
                 "OBS support isn't installed: pip install 'broomstack-receiver[obs]'"
             ) from None
         return obsws_python.ReqClient(
-            host=self.host, port=self.port, password=self.password, timeout=self.timeout
+            host=self.host,
+            port=self.port,
+            password=self.password,
+            timeout=self.timeout if timeout is None else timeout,
         )
 
     def check(self):
@@ -86,13 +89,12 @@ class ObsPusher(Pusher):
         frame either way, and every call spends Broomstack's 10 seconds."""
         import base64
 
-        timeout, self.timeout = self.timeout, min(self.timeout, self.SNAPSHOT_TIMEOUT)
+        # A timeout for this call alone: never the shared setting, which a
+        # start on another thread may be using (code review on PR #1).
         try:
-            client = self._client()
+            client = self._client(timeout=min(self.timeout, self.SNAPSHOT_TIMEOUT))
         except Exception:  # noqa: BLE001 - OBS closed, or not installed: no frame
             return None
-        finally:
-            self.timeout = timeout
         try:
             video = client.get_video_settings()
             width = 1280

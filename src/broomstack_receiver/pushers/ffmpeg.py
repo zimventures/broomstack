@@ -5,6 +5,7 @@ logged, and ffmpeg's own output, which can echo its output URL, goes
 through the key scrubber before it reaches the log.
 """
 
+import hashlib
 import logging
 import os
 import shutil
@@ -54,7 +55,11 @@ class FfmpegPusher(Pusher):
         self.input = list(config.get('input', TEST_INPUT))
         self.output = list(config.get('output', DEFAULT_OUTPUT))
         every = config.get('snapshot_every', SNAPSHOT_EVERY)
-        if not isinstance(every, int) or not 1 <= every <= MAX_SNAPSHOT_EVERY:
+        if (
+            isinstance(every, bool)
+            or not isinstance(every, int)
+            or not 1 <= every <= MAX_SNAPSHOT_EVERY
+        ):
             # fps=1/0 would stop the push itself, not just the frames.
             raise ValueError(
                 f'snapshot_every must be a whole number of seconds, 1 to {MAX_SNAPSHOT_EVERY}'
@@ -63,11 +68,16 @@ class FfmpegPusher(Pusher):
         # A directory the receiver owns (under state_dir), made again before
         # every push: if the frame output can't write, ffmpeg stops the
         # whole process, push and all (code review on PR #1).
-        safe = ''.join(c if c.isalnum() else '-' for c in str(label)) or 'sheet'
+        # Readable, and unique per label even where two labels read the same
+        # once cleaned ("Sheet 1" and "Sheet-1") or differ only in case on a
+        # case-blind disk: two sheets sharing a frame would swap scores.
+        label = str(label)
+        safe = ''.join(c if c.isalnum() else '-' for c in label).lower() or 'sheet'
+        digest = hashlib.sha1(label.encode()).hexdigest()[:8]
         self.frame_dir = os.path.join(
             state_dir or os.path.join(tempfile.gettempdir(), 'broomstack-receiver'),
             'frames',
-            safe,
+            f'{safe}-{digest}',
         )
         self.snapshot_path = os.path.join(self.frame_dir, 'frame.jpg')
         self._last_frame = None  # (time read, bytes): the last whole frame
@@ -77,6 +87,14 @@ class FfmpegPusher(Pusher):
     def check(self):
         if shutil.which(self.binary) is None:
             return f'ffmpeg not found ({self.binary})'
+        # ffmpeg stops the push if it can't write a frame, so a frame
+        # directory it can't write to is a 503 now, not a dead push later.
+        try:
+            os.makedirs(self.frame_dir, exist_ok=True)
+        except OSError:
+            return 'the frame directory under state_dir is not writable'
+        if not os.access(self.frame_dir, os.W_OK):
+            return 'the frame directory under state_dir is not writable'
         return None
 
     def command(self, ingest_url, stream_key):
@@ -96,6 +114,11 @@ class FfmpegPusher(Pusher):
         with self._lock:
             self._stop_locked()
             os.makedirs(self.frame_dir, exist_ok=True)
+            # Never the last push's frame: it may be another game's.
+            try:
+                os.remove(self.snapshot_path)
+            except FileNotFoundError:
+                pass
             self._last_frame = None
             try:
                 self._process = subprocess.Popen(
@@ -147,11 +170,14 @@ class FfmpegPusher(Pusher):
         limit = 3 * self.snapshot_every
         now = time.time()
         try:
-            if now - os.path.getmtime(self.snapshot_path) <= limit:
+            written = os.path.getmtime(self.snapshot_path)
+            if now - written <= limit:
                 with open(self.snapshot_path, 'rb') as handle:
                     data = handle.read(MAX_FRAME + 1)
                 if data.startswith(JPEG_START) and data.endswith(JPEG_END) and len(data) <= MAX_FRAME:
-                    self._last_frame = (now, data)
+                    # Aged from when ffmpeg wrote it, not when it was read,
+                    # so the fallback below can't stretch the limit.
+                    self._last_frame = (written, data)
                     return 'image/jpeg', data
         except OSError:
             pass

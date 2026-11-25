@@ -13,7 +13,7 @@ This is the reference implementation of the receiver contract: **[Streaming webh
 - **On `game.started`:** checks the camera or OBS is there, answers, then starts pushing. If it can't stream, it answers `503`, so Broomstack retries and emails the facility's admins.
 - **On `stream.restart`:** restarts the push with the stream it is given.
 - **On `game.finished`:** stops.
-- **On `scoreboard.snapshot`** (live scoring): answers with a recent frame of the stream, a JPEG, or `503` when it isn't streaming. Never queued or remembered with the game deliveries: each request wants a frame now.
+- **On `scoreboard.snapshot`** (live scoring): answers with a recent frame, a JPEG, or `503` when it has none. With ffmpeg that's a frame of the push, so `503` when it isn't streaming; with OBS it's the scene on air, streaming or not. Never queued or remembered with the game deliveries: each request wants a frame now.
 - **A start with no stream** (the club has no YouTube channel connected) pushes nothing.
 - **A late start** that arrives after its game's finish is ignored.
 - **Never logs the stream key.** Every log line is scrubbed of keys it has been given, ffmpeg's own output included.

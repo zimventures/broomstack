@@ -84,30 +84,87 @@ def test_the_push_also_writes_a_frame_and_it_is_offered_when_fresh(tmp_path):
         pusher.stop()
 
 
+def test_the_fallback_is_aged_from_when_the_frame_was_written(tmp_path):
+    """A frame read just inside the limit can't be served past it."""
+    pusher = FfmpegPusher({'ffmpeg': stand_in(tmp_path)}, state_dir=str(tmp_path))
+    whole = b'\xff\xd8\xff\xe0' + b'\x00' * 10 + b'\xff\xd9'
+    try:
+        pusher.start('rtmp://a.rtmp.youtube.com/live2', KEY)
+        with open(pusher.snapshot_path, 'wb') as handle:
+            handle.write(whole)
+        nearly = time.time() - (3 * pusher.snapshot_every - 1)
+        os.utime(pusher.snapshot_path, (nearly, nearly))
+        assert pusher.snapshot() is not None  # read 14 s after it was written
+        # Five seconds on, the camera froze: the file isn't rewritten. The
+        # kept frame is now 19 s old, past the 15 s limit, so it isn't served.
+        os.remove(pusher.snapshot_path)
+        from unittest import mock
+
+        with mock.patch('broomstack_receiver.pushers.ffmpeg.time.time', return_value=time.time() + 5):
+            assert pusher.snapshot() is None
+    finally:
+        pusher.stop()
+
+
+def test_a_restart_never_offers_the_last_pushs_frame(tmp_path):
+    pusher = FfmpegPusher({'ffmpeg': stand_in(tmp_path)}, state_dir=str(tmp_path))
+    try:
+        pusher.start('rtmp://a.rtmp.youtube.com/live2', KEY)
+        with open(pusher.snapshot_path, 'wb') as handle:
+            handle.write(b'\xff\xd8\xff\xe0' + b'\x00' * 10 + b'\xff\xd9')
+        pusher.start('rtmp://a.rtmp.youtube.com/live2', KEY)  # the next game
+        assert pusher.snapshot() is None
+    finally:
+        pusher.stop()
+
+
+def test_labels_that_read_alike_get_their_own_frame(tmp_path):
+    directories = {
+        FfmpegPusher({}, label=label, state_dir=str(tmp_path)).frame_dir
+        for label in ('Sheet 1', 'Sheet-1', 'A', 'a', '*', '-')
+    }
+    assert len(directories) == 6
+    assert len({d.lower() for d in directories}) == 6  # case-blind disks too
+
+
+def test_a_frame_directory_it_cannot_write_is_a_503_not_a_dead_push(tmp_path):
+    blocked = tmp_path / 'state'
+    blocked.write_text('a file, not a directory')
+    pusher = FfmpegPusher({'ffmpeg': stand_in(tmp_path)}, state_dir=str(blocked))
+    assert 'not writable' in pusher.check()
+
+
 def test_snapshot_every_is_checked_when_the_pusher_is_built():
     import pytest
 
-    for bad in (0, 11, 2.5, '5'):
+    for bad in (0, 11, 2.5, '5', True):
         with pytest.raises(ValueError, match='snapshot_every'):
             FfmpegPusher({'snapshot_every': bad})
 
 
-def test_with_real_ffmpeg_the_push_survives_a_missing_frame_directory(tmp_path):
-    """The reviewer's case: the frame directory gone between games. It is
-    made again before each push, so the push runs and frames come."""
+def test_with_real_ffmpeg_the_frame_directory_is_made_before_the_push(tmp_path):
+    """The frame directory missing when a game starts (cleaned up between
+    games): it's made first, so the push runs and frames come. A directory
+    deleted mid-push still stops ffmpeg; the README says so."""
     import shutil
+    import subprocess
 
     import pytest
 
     if shutil.which('ffmpeg') is None:
         pytest.skip('ffmpeg is not installed')
+    encoders = subprocess.run(
+        ['ffmpeg', '-hide_banner', '-encoders'], capture_output=True, text=True
+    ).stdout
+    if 'libx264' not in encoders:
+        pytest.skip('ffmpeg is built without libx264')
     pusher = FfmpegPusher(
         {'snapshot_every': 1, 'output': ['-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-f', 'flv']},
         state_dir=str(tmp_path / 'state'),
     )
     out = tmp_path / 'pushed'
     out.mkdir()
-    shutil.rmtree(tmp_path / 'state', ignore_errors=True)
+    assert not (tmp_path / 'state').exists()
     try:
         pusher.start(str(out), 'game.flv')  # a local file stands in for RTMP
         deadline = time.time() + 10
