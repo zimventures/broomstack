@@ -6,9 +6,12 @@ through the key scrubber before it reaches the log.
 """
 
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
 import threading
+import time
 
 from .. import secrets
 from . import Pusher
@@ -30,13 +33,26 @@ DEFAULT_OUTPUT = [
 ]
 
 
+#: How often the push also writes a frame for scoreboard snapshots, seconds.
+SNAPSHOT_EVERY = 5
+
+
 class FfmpegPusher(Pusher):
+    """Pushes with ffmpeg, and, from the same process, writes a small JPEG
+    of the picture every few seconds. That file answers Broomstack's
+    scoreboard snapshot requests: the camera is opened once, by the push,
+    never a second time while it's streaming."""
+
     name = 'ffmpeg'
 
     def __init__(self, config):
         self.binary = config.get('ffmpeg', 'ffmpeg')
         self.input = list(config.get('input', TEST_INPUT))
         self.output = list(config.get('output', DEFAULT_OUTPUT))
+        self.snapshot_every = int(config.get('snapshot_every', SNAPSHOT_EVERY))
+        self.snapshot_path = os.path.join(
+            tempfile.mkdtemp(prefix='broomstack-frame-'), 'frame.jpg'
+        )
         self._process = None
         self._lock = threading.Lock()
 
@@ -47,8 +63,15 @@ class FfmpegPusher(Pusher):
 
     def command(self, ingest_url, stream_key):
         target = f'{ingest_url.rstrip("/")}/{stream_key}'
+        # A second output: one frame every few seconds, overwritten in place.
+        # Options before an output apply to it alone, so the push's encoding
+        # above is untouched.
+        frame = [
+            '-an', '-vf', f"fps=1/{self.snapshot_every},scale='min(1280,iw)':-2",
+            '-q:v', '5', '-update', '1', '-f', 'image2', '-y', self.snapshot_path,
+        ]
         return [self.binary, '-hide_banner', '-loglevel', 'warning',
-                *self.input, *self.output, target]
+                *self.input, *self.output, target, *frame]
 
     def start(self, ingest_url, stream_key):
         secrets.remember(stream_key)
@@ -93,3 +116,19 @@ class FfmpegPusher(Pusher):
 
     def running(self):
         return self._process is not None and self._process.poll() is None
+
+    def snapshot(self):
+        """The latest frame the push wrote, if it's recent; else ``None``."""
+        if not self.running():
+            return None
+        try:
+            age = time.time() - os.path.getmtime(self.snapshot_path)
+            if age > max(3 * self.snapshot_every, 15):
+                return None
+            with open(self.snapshot_path, 'rb') as handle:
+                data = handle.read(2 * 1024 * 1024 + 1)
+        except OSError:
+            return None
+        if not data.startswith(b'\xff\xd8\xff') or len(data) > 2 * 1024 * 1024:
+            return None  # mid-write, or not what we asked ffmpeg for
+        return 'image/jpeg', data

@@ -18,7 +18,8 @@ def stand_in(tmp_path):
     script.write_text(
         f'#!{sys.executable}\n'
         'import sys, time\n'
-        'print("Error opening output", sys.argv[-1], file=sys.stderr, flush=True)\n'
+        'url = next(a for a in sys.argv if a.startswith("rtmp"))\n'
+        'print("Error opening output", url, file=sys.stderr, flush=True)\n'
         'time.sleep(30)\n'
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
@@ -55,3 +56,22 @@ def test_start_runs_ffmpeg_and_its_output_is_scrubbed(tmp_path):
 
 def test_check_says_when_ffmpeg_is_missing():
     assert 'not found' in FfmpegPusher({'ffmpeg': os.path.join('/nope', 'ffmpeg')}).check()
+
+
+def test_the_push_also_writes_a_frame_and_it_is_offered_when_fresh(tmp_path):
+    pusher = FfmpegPusher({'ffmpeg': stand_in(tmp_path)})
+    command = pusher.command('rtmp://a.rtmp.youtube.com/live2', KEY)
+    target = command.index(f'rtmp://a.rtmp.youtube.com/live2/{KEY}')
+    frame = command[target + 1 :]
+    assert frame[-1] == pusher.snapshot_path and '-an' in frame and 'image2' in frame
+    assert pusher.snapshot() is None  # not streaming
+    try:
+        pusher.start('rtmp://a.rtmp.youtube.com/live2', KEY)
+        with open(pusher.snapshot_path, 'wb') as handle:
+            handle.write(b'\xff\xd8\xff\xe0' + b'\x00' * 10)
+        assert pusher.snapshot()[0] == 'image/jpeg'
+        old = time.time() - 600
+        os.utime(pusher.snapshot_path, (old, old))
+        assert pusher.snapshot() is None  # stale
+    finally:
+        pusher.stop()

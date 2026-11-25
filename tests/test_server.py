@@ -55,3 +55,38 @@ def test_a_bad_signature_is_401_and_does_nothing(server, start_payload, fake):
 
 def test_a_ping(server):
     assert post(server, {'event': 'ping'}) == (200, 'pong')
+
+
+JPEG = b'\xff\xd8\xff\xe0' + b'\x00' * 100
+
+
+def snapshot_request(start_payload):
+    return {
+        'event': 'scoreboard.snapshot',
+        'occurred_at': start_payload['occurred_at'],
+        'sheet': start_payload['sheet'],
+        'game': start_payload['game'],
+    }
+
+
+def test_a_snapshot_is_answered_with_the_frame(server, start_payload, fake):
+    fake.frame = ('image/jpeg', JPEG)
+    body = json.dumps(snapshot_request(start_payload), separators=(',', ':'))
+    now = int(time.time())
+    signature = hmac.new(SECRET.encode(), f'{now}.{body}'.encode(), hashlib.sha256)
+    connection = http.client.HTTPConnection(*server.server_address[:2], timeout=5)
+    for _ in range(2):  # never "already handled": each request wants a frame
+        connection.request('POST', '/', body=body, headers={
+            'Content-Type': 'application/json',
+            'X-Broomstack-Delivery': 'snapshot-7',
+            'X-Broomstack-Signature': f't={now},v1={signature.hexdigest()}',
+        })
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.getheader('Content-Type') == 'image/jpeg'
+        assert response.read() == JPEG
+
+
+def test_no_frame_is_a_503_and_unsigned_is_a_401(server, start_payload, fake):
+    assert post(server, snapshot_request(start_payload), delivery='snapshot-8')[0] == 503
+    assert post(server, snapshot_request(start_payload), secret='wrong')[0] == 401

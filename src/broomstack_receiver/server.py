@@ -7,6 +7,7 @@ import json
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from .receiver import snapshot
 from .signature import verify
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,10 @@ def make_server(receiver, secret, host='127.0.0.1', port=8800):
                 return self._answer(400, 'not a JSON object')
 
             delivery = self.headers.get('X-Broomstack-Delivery') or ''
+            if payload.get('event') == 'scoreboard.snapshot':
+                status, content_type, frame = snapshot(receiver, payload)
+                logger.info('Snapshot %s: %s', delivery or '-', status)
+                return self._send(status, content_type, frame)
             outcome = receiver.receive(delivery, payload)
             logger.info(
                 'Delivery %s (%s): %s %s',
@@ -50,9 +55,11 @@ def make_server(receiver, secret, host='127.0.0.1', port=8800):
             self._answer(outcome.status, outcome.reason)
 
         def _answer(self, status, text):
-            data = (text + '\n').encode()
+            self._send(status, 'text/plain; charset=utf-8', (text + '\n').encode())
+
+        def _send(self, status, content_type, data):
             self.send_response(status)
-            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)

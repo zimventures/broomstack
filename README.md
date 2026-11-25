@@ -13,6 +13,7 @@ This is the reference implementation of the receiver contract: **[Streaming webh
 - **On `game.started`:** checks the camera or OBS is there, answers, then starts pushing. If it can't stream, it answers `503`, so Broomstack retries and emails the facility's admins.
 - **On `stream.restart`:** restarts the push with the stream it is given.
 - **On `game.finished`:** stops.
+- **On `scoreboard.snapshot`** (live scoring): answers with a recent frame of the stream, a JPEG, or `503` when it isn't streaming. Never queued or remembered with the game deliveries: each request wants a frame now.
 - **A start with no stream** (the club has no YouTube channel connected) pushes nothing.
 - **A late start** that arrives after its game's finish is ignored.
 - **Never logs the stream key.** Every log line is scrubbed of keys it has been given, ffmpeg's own output included.
@@ -67,13 +68,13 @@ Run it as a service (launchd, systemd, or a scheduled task on Windows) so it sta
 
 ## Pushers
 
-**ffmpeg** reads the `input` you give it (see the example config for macOS, Linux and Windows cameras) and encodes what YouTube asks for: H.264 and AAC in FLV, with a keyframe every two seconds. Override `output` to change the bitrate.
+**ffmpeg** reads the `input` you give it (see the example config for macOS, Linux and Windows cameras) and encodes what YouTube asks for: H.264 and AAC in FLV, with a keyframe every two seconds. Override `output` to change the bitrate. The same ffmpeg also writes a frame every `snapshot_every` seconds (default 5) for scoreboard snapshots, so the camera is never opened twice.
 
-**OBS** sets OBS's stream service to the ingest URL and key Broomstack gives it, then starts streaming. Your scenes, camera and browser sources stay as you set them up. Turn on OBS's WebSocket server (Tools → WebSocket Server Settings) and give the receiver its password.
+**OBS** sets OBS's stream service to the ingest URL and key Broomstack gives it, then starts streaming. Your scenes, camera and browser sources stay as you set them up. A scoreboard snapshot is a screenshot of the scene on air. Turn on OBS's WebSocket server (Tools → WebSocket Server Settings) and give the receiver its password.
 
 OBS saves stream settings, the key included, in its profile on disk. That's OBS's file, not this receiver's, so protect the PC accordingly.
 
-**Your own:** subclass `broomstack_receiver.pushers.Pusher` and implement `check`, `start`, `stop` and `running`. `start` is handed the stream key: don't log it, don't put it in an exception message, and don't write it anywhere of your own.
+**Your own:** subclass `broomstack_receiver.pushers.Pusher` and implement `check`, `start`, `stop` and `running`, and `snapshot` for live scoring. `start` is handed the stream key: don't log it, don't put it in an exception message, and don't write it anywhere of your own.
 
 ## Not yet
 
@@ -81,7 +82,6 @@ Broomstack is adding these to the contract. The receiver will follow:
 
 - **Failure reports.** A push that fails after Broomstack was answered is only logged for now. Broomstack will add a signed URL to report it, so the facility's admins hear about it (`receiver.report_failure`).
 - **Overlays:** the scoreboard as a browser source in OBS.
-- **Scoreboard snapshots.**
 
 ## Developing
 

@@ -76,6 +76,32 @@ class ObsPusher(Pusher):
         finally:
             client.disconnect()
 
+    def snapshot(self):
+        """A screenshot of the scene on air: what the stream shows."""
+        import base64
+
+        try:
+            client = self._client()
+        except RuntimeError:
+            return None
+        try:
+            if not client.get_stream_status().output_active:
+                return None
+            scene = client.get_current_program_scene()
+            name = getattr(scene, 'current_program_scene_name', None) or getattr(
+                scene, 'scene_name', None
+            )
+            shot = client.get_source_screenshot(name, 'jpg', 1280, 720, 80)
+            data = getattr(shot, 'image_data', '') or ''
+            data = base64.b64decode(data.split(',', 1)[-1])
+        except Exception:  # noqa: BLE001 - no frame is an answer, not a crash
+            return None
+        finally:
+            client.disconnect()
+        if not data.startswith(b'\xff\xd8\xff') or len(data) > 2 * 1024 * 1024:
+            return None
+        return 'image/jpeg', data
+
     def running(self):
         client = self._client()
         try:

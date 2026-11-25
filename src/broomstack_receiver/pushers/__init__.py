@@ -29,6 +29,13 @@ class Pusher:
     def running(self):
         raise NotImplementedError
 
+    def snapshot(self):
+        """A recent frame of what's being streamed, for live scoring:
+        ``(content_type, bytes)``, a JPEG or PNG of at most 2 MB, or ``None``
+        when there's no frame to give (not streaming). Called while
+        Broomstack waits: keep it well under ten seconds."""
+        return None
+
 
 def build(config):
     """The pusher a sheet's config section asks for."""
