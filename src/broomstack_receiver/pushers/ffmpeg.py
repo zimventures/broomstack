@@ -141,8 +141,11 @@ class FfmpegPusher(Pusher):
         for line in process.stderr:
             logger.warning('ffmpeg: %s', secrets.scrub(line.rstrip()))
         code = process.wait()
-        if code not in (0, -15, 255):  # 255/-15: stopped by us
+        # Still the current push: nobody stopped it, it ended on its own
+        # (a stop clears _process first). That's a failure to report.
+        if process is self._process:
             logger.error('ffmpeg exited with %s', code)
+            self.on_exit(f'ffmpeg stopped unexpectedly (exit {code})')
 
     def stop(self):
         with self._lock:

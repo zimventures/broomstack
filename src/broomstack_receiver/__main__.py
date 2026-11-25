@@ -47,6 +47,7 @@ def main(argv=None):
             for label, section in sheets.items()
         },
         seen=Seen(os.path.join(state, 'seen.json')),
+        secret=secret,
     )
     host, _, port = str(config.get('listen', '127.0.0.1:8800')).rpartition(':')
     server = make_server(receiver, secret, host or '127.0.0.1', int(port))

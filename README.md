@@ -16,6 +16,7 @@ This is the reference implementation of the receiver contract: **[Streaming webh
 - **On `scoreboard.snapshot`** (live scoring): answers with a recent frame, a JPEG, or `503` when it has none. With ffmpeg that's a frame of the push, so `503` when it isn't streaming; with OBS it's the scene on air, streaming or not. Never queued or remembered with the game deliveries: each request wants a frame now.
 - **A start with no stream** (the club has no YouTube channel connected) pushes nothing.
 - **A late start** that arrives after its game's finish is ignored.
+- **Reports a push that fails later** (ffmpeg dies mid-game, OBS refuses the stream) to the start's `report_url`, signed, so the facility's admins hear about it from Broomstack.
 - **Never logs the stream key.** Every log line is scrubbed of keys it has been given, ffmpeg's own output included.
 
 ## Requirements
@@ -78,10 +79,7 @@ OBS saves stream settings, the key included, in its profile on disk. That's OBS'
 
 ## Not yet
 
-Broomstack is adding these to the contract. The receiver will follow:
-
-- **Failure reports.** A push that fails after Broomstack was answered is only logged for now. Broomstack will add a signed URL to report it, so the facility's admins hear about it (`receiver.report_failure`).
-- **Overlays:** the scoreboard as a browser source in OBS.
+- **Overlays in OBS:** pointing an OBS browser source at the start's `stream.overlays.scoreboard_url` for you. Add it by hand for now.
 
 ## Developing
 

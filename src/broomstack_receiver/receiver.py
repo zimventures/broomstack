@@ -58,6 +58,11 @@ class SheetWorker:
         self.pusher = pusher
         self.on_failure = on_failure
         self.last = None  # occurred_at of the last event acted on
+        #: Where to report a failure of the current push (the start's
+        #: stream.report_url), or None between games.
+        self.report_url = None
+        # A push that dies on its own, mid-game, is a failure too.
+        pusher.on_exit = lambda why: on_failure(label, why)
         self._queue = queue.Queue()
         threading.Thread(target=self._run, name=f'sheet-{label}', daemon=True).start()
 
@@ -82,14 +87,28 @@ class SheetWorker:
 
 
 class Receiver:
-    def __init__(self, pushers, *, seen=None, on_failure=None):
-        """``pushers``: sheet label (or ``'*'`` for any) to a Pusher."""
+    def __init__(self, pushers, *, seen=None, on_failure=None, secret=''):
+        """``pushers``: sheet label (or ``'*'`` for any) to a Pusher.
+        ``secret`` signs failure reports to Broomstack."""
         self.seen = seen if seen is not None else Seen()
-        self.on_failure = on_failure or report_failure
+        self.secret = secret
+        self.on_failure = on_failure or self.report_failure
         self.workers = {
             label: SheetWorker(label, pusher, self.on_failure)
             for label, pusher in pushers.items()
         }
+
+    def report_failure(self, sheet, why):
+        """A push that failed after Broomstack was answered: logged, and
+        reported to the start's ``report_url`` so the facility's admins hear."""
+        from .reporter import send_later
+
+        why = secrets.scrub(why)
+        logger.error('Sheet %s: the push failed: %s', sheet, why)
+        worker = self.workers.get(sheet)
+        if worker is None or not worker.report_url or not self.secret:
+            return
+        send_later(worker.report_url, self.secret, why)
 
     def worker_for(self, payload):
         label = ((payload.get('sheet') or {}).get('label')) or None
@@ -122,6 +141,7 @@ class Receiver:
 
         if event == 'game.finished':
             worker.last = when or worker.last
+            worker.report_url = None
             worker.submit(worker.pusher.stop)
             logger.info('Sheet %s: game finished, stopping', sheet)
             return Outcome(200, 'stopping')
@@ -141,6 +161,7 @@ class Receiver:
             return Outcome(503, f'cannot stream: {problem}')
 
         worker.last = when or worker.last
+        worker.report_url = (payload.get('stream') or {}).get('report_url') or None
         worker.submit(worker.pusher.start, *target)
         part = (payload.get('stream') or {}).get('part')
         logger.info('Sheet %s: %s, pushing part %s', sheet, event, part)
@@ -162,13 +183,3 @@ def snapshot(receiver, payload):
     if frame is None:
         return 503, 'text/plain; charset=utf-8', b'no frame right now\n'
     return 200, frame[0], frame[1]
-
-
-def report_failure(sheet, why):
-    """A push that failed after Broomstack was answered.
-
-    For now it's logged. Broomstack is adding a signed callback for these
-    reports, so the facility's admins hear about them; this is where the
-    receiver will call it.
-    """
-    logger.error('Sheet %s: the push failed: %s', sheet, why)

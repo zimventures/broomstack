@@ -12,6 +12,8 @@ exception message, or write it to a file of its own.
 class Pusher:
     #: Shown in logs; never includes a key.
     name = 'pusher'
+    #: Set by the receiver: called with a reason when a push ends on its own.
+    on_exit = staticmethod(lambda why: None)
 
     def check(self):
         """A short reason this pusher can't stream right now, or ``None``.
