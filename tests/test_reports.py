@@ -149,7 +149,10 @@ def test_a_failure_goes_to_its_own_starts_url_not_the_next_ones(start_payload, m
     receiver.receive('2', second)
     gate.set()
     receiver.workers['A'].drain()
-    assert sent[0] == 'https://b.example/api/streams/1/report/'
+    assert sent == [
+        'https://b.example/api/streams/1/report/',
+        'https://b.example/api/streams/2/report/',
+    ]
 
 
 def test_ffmpeg_dying_is_reported_through_the_sheet_to_its_url(start_payload, monkeypatch, tmp_path):
@@ -182,3 +185,30 @@ def test_a_garbled_answer_is_retried_not_dropped():
 
     opener = Opener(http.client.BadStatusLine('x'), 200)
     assert reporter.send('https://b.example/r/', 's', 'x', opener=opener, wait=lambda s: None) == 200
+
+
+def test_a_push_that_dies_reports_to_its_own_start_even_after_the_next_began(monkeypatch):
+    sent = []
+    monkeypatch.setattr(reporter, 'send_later', lambda url, secret, why: sent.append(url))
+    pusher = FakePusher()
+    receiver = Receiver({'A': pusher}, seen=Seen(), secret='whsec')
+    worker = receiver.workers['A']
+    worker.start('https://b.example/api/streams/1/report/', 'rtmp://x', 'k')
+    dies = pusher.on_exit  # game 1's push's callback
+    worker.report_url = 'https://b.example/api/streams/2/report/'  # game 2 starting
+    dies('ffmpeg stopped unexpectedly (exit 1)')
+    assert sent == ['https://b.example/api/streams/1/report/']
+
+
+def test_shutting_down_runs_nothing_queued_and_reports_nothing(start_payload, monkeypatch):
+    sent = []
+    monkeypatch.setattr(reporter, 'send_later', lambda *args: sent.append(args))
+    pusher = FakePusher(fail_with='boom')
+    receiver = Receiver({'A': pusher}, seen=Seen(), secret='whsec')
+    start_payload['stream']['report_url'] = 'https://b.example/r/'
+    receiver.closing.set()
+    receiver.receive('1', start_payload)
+    receiver.workers['A'].drain()
+    assert pusher.calls == []  # the queued start never ran
+    receiver.report_failure('A', 'killed by Ctrl-C', 'https://b.example/r/')
+    assert sent == []

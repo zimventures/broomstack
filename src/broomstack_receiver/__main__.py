@@ -59,10 +59,9 @@ def main(argv=None):
     except KeyboardInterrupt:
         pass
     finally:
-        # Shutting down: a Ctrl-C reaches ffmpeg too, and its exit isn't a
-        # failure to tell the facility's admins about (code review on PR #2).
-        for worker in receiver.workers.values():
-            worker.pusher.on_exit = lambda why: None
+        # Shutting down: no queued start may run after its sheet is stopped,
+        # and a Ctrl-C reaching ffmpeg isn't a failure to report.
+        receiver.closing.set()
         for worker in receiver.workers.values():
             try:
                 worker.pusher.stop()

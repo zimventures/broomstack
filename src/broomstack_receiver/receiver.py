@@ -53,18 +53,20 @@ def _when(payload):
 class SheetWorker:
     """Runs one sheet's starts and stops, one at a time, in order."""
 
-    def __init__(self, label, pusher, on_failure):
+    def __init__(self, label, pusher, on_failure, closing=None):
         self.label = label
         self.pusher = pusher
         self.on_failure = on_failure
+        #: Set when the receiver shuts down: queued work is dropped, so no
+        #: push starts after the sheet was stopped, and nothing is reported.
+        self.closing = closing or threading.Event()
         self.last = None  # occurred_at of the last event acted on
         #: Where to report a failure of the push now running: set on this
         #: worker's own thread just before that push starts, cleared when it
         #: stops. Never the next game's, which may be waiting in the queue
         #: (code review on PR #2).
         self.report_url = None
-        # A push that dies on its own, mid-game, is a failure too.
-        pusher.on_exit = lambda why: on_failure(label, why)
+
         self._queue = queue.Queue()
         threading.Thread(target=self._run, name=f'sheet-{label}', daemon=True).start()
 
@@ -72,9 +74,15 @@ class SheetWorker:
         self._queue.put((action, args))
 
     def start(self, report_url, ingest_url, stream_key):
-        """Queued: start a push, and from then on report its failures to
-        the start that asked for it."""
+        """Queued: start a push, and report its failures to the start that
+        asked for it. Its own death mid-game goes to *its* URL, bound here,
+        even if the next game's start has begun by then (code review on PR #2)."""
+        if self.closing.is_set():
+            return
         self.report_url = report_url
+        self.pusher.on_exit = lambda why, url=report_url: self.on_failure(
+            self.label, why, url
+        )
         self.pusher.start(ingest_url, stream_key)
 
     def stop(self):
@@ -90,6 +98,8 @@ class SheetWorker:
         while True:
             action, args = self._queue.get()
             try:
+                if self.closing.is_set():
+                    continue  # shutting down: nothing queued runs any more
                 action(*args)
             except Exception as error:  # noqa: BLE001 - one bad push mustn't stop the sheet
                 why = secrets.scrub(str(error))
@@ -106,22 +116,28 @@ class Receiver:
         self.seen = seen if seen is not None else Seen()
         self.secret = secret
         self.on_failure = on_failure or self.report_failure
+        self.closing = threading.Event()
         self.workers = {
-            label: SheetWorker(label, pusher, self.on_failure)
+            label: SheetWorker(label, pusher, self.on_failure, self.closing)
             for label, pusher in pushers.items()
         }
 
-    def report_failure(self, sheet, why):
+    def report_failure(self, sheet, why, report_url=None):
         """A push that failed after Broomstack was answered: logged, and
-        reported to the start's ``report_url`` so the facility's admins hear."""
+        reported to its start's ``report_url`` so the facility's admins
+        hear. Not while shutting down: a Ctrl-C reaches ffmpeg too."""
         from .reporter import send_later
 
         why = secrets.scrub(why)
+        if self.closing.is_set():
+            logger.info('Sheet %s: stopped while shutting down: %s', sheet, why)
+            return
         logger.error('Sheet %s: the push failed: %s', sheet, why)
         worker = self.workers.get(sheet)
-        if worker is None or not worker.report_url or not self.secret:
+        url = report_url or (worker.report_url if worker is not None else None)
+        if not url or not self.secret:
             return
-        send_later(worker.report_url, self.secret, why)
+        send_later(url, self.secret, why)
 
     def worker_for(self, payload):
         label = ((payload.get('sheet') or {}).get('label')) or None
