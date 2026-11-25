@@ -30,7 +30,7 @@ class ObsPusher(Pusher):
         self.password = config.get('obs_password', '')
         self.timeout = float(config.get('obs_timeout', 3))
 
-    def _client(self):
+    def _client(self, timeout=None):
         try:
             import obsws_python
         except ImportError:
@@ -38,7 +38,10 @@ class ObsPusher(Pusher):
                 "OBS support isn't installed: pip install 'broomstack-receiver[obs]'"
             ) from None
         return obsws_python.ReqClient(
-            host=self.host, port=self.port, password=self.password, timeout=self.timeout
+            host=self.host,
+            port=self.port,
+            password=self.password,
+            timeout=self.timeout if timeout is None else timeout,
         )
 
     def check(self):
@@ -75,6 +78,43 @@ class ObsPusher(Pusher):
                 logger.info('OBS streaming stopped')
         finally:
             client.disconnect()
+
+    #: Per call during a snapshot, which Broomstack waits 10 seconds for in
+    #: all: connect plus three short requests stays well inside it.
+    SNAPSHOT_TIMEOUT = 2
+
+    def snapshot(self):
+        """A screenshot of the scene on air, 1280 wide at OBS's own aspect
+        ratio. Doesn't ask whether OBS is streaming: the scene on air is the
+        frame either way, and every call spends Broomstack's 10 seconds."""
+        import base64
+
+        # A timeout for this call alone: never the shared setting, which a
+        # start on another thread may be using (code review on PR #1).
+        try:
+            client = self._client(timeout=min(self.timeout, self.SNAPSHOT_TIMEOUT))
+        except Exception:  # noqa: BLE001 - OBS closed, or not installed: no frame
+            return None
+        try:
+            video = client.get_video_settings()
+            width = 1280
+            height = max(2, round(width * video.base_height / video.base_width))
+            scene = client.get_current_program_scene()
+            name = getattr(scene, 'current_program_scene_name', None) or getattr(
+                scene, 'scene_name', None
+            )
+            shot = client.get_source_screenshot(name, 'jpg', width, height, 80)
+            data = getattr(shot, 'image_data', '') or ''
+            data = base64.b64decode(data.split(',', 1)[-1])
+        except Exception:  # noqa: BLE001 - no frame is an answer, not a crash
+            return None
+        finally:
+            client.disconnect()
+        if not data.startswith(b'\xff\xd8\xff') or not data.endswith(b'\xff\xd9'):
+            return None
+        if len(data) > 2 * 1024 * 1024:
+            return None
+        return 'image/jpeg', data
 
     def running(self):
         client = self._client()

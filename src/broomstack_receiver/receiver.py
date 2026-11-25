@@ -147,6 +147,23 @@ class Receiver:
         return Outcome(202, 'starting')
 
 
+def snapshot(receiver, payload):
+    """Answer a ``scoreboard.snapshot`` request: ``(status, content_type,
+    body)``. Never remembered with the game deliveries, and never queued:
+    each request wants a frame now."""
+    worker = receiver.worker_for(payload)
+    if worker is None:
+        return 404, 'text/plain; charset=utf-8', b'not a sheet this receiver streams\n'
+    try:
+        frame = worker.pusher.snapshot()
+    except Exception as error:  # noqa: BLE001 - no frame, said plainly
+        logger.warning('Sheet %s: no snapshot: %s', worker.label, secrets.scrub(str(error)))
+        frame = None
+    if frame is None:
+        return 503, 'text/plain; charset=utf-8', b'no frame right now\n'
+    return 200, frame[0], frame[1]
+
+
 def report_failure(sheet, why):
     """A push that failed after Broomstack was answered.
 

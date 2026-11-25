@@ -34,6 +34,11 @@ class FakePusher:
     def running(self):
         return bool(self.calls) and self.calls[-1][0] == 'start'
 
+    frame = None
+
+    def snapshot(self):
+        return self.frame
+
 
 @pytest.fixture
 def fake():

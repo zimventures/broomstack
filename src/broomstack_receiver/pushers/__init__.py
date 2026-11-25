@@ -29,14 +29,21 @@ class Pusher:
     def running(self):
         raise NotImplementedError
 
+    def snapshot(self):
+        """A recent frame of what's being streamed, for live scoring:
+        ``(content_type, bytes)``, a JPEG or PNG of at most 2 MB, or ``None``
+        when there's no frame to give (not streaming). Called while
+        Broomstack waits: keep it well under ten seconds."""
+        return None
 
-def build(config):
+
+def build(config, *, label='sheet', state_dir=None):
     """The pusher a sheet's config section asks for."""
     kind = config.get('pusher', 'ffmpeg')
     if kind == 'ffmpeg':
         from .ffmpeg import FfmpegPusher
 
-        return FfmpegPusher(config)
+        return FfmpegPusher(config, label=label, state_dir=state_dir)
     if kind == 'obs':
         from .obs import ObsPusher
 

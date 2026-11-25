@@ -15,6 +15,8 @@ state_dir = "state"
 # Use [sheets."*"] for "whatever sheet the webhook names".
 [sheets.A]
 pusher = "ffmpeg"
+# Seconds between frames for live scoring's scoreboard snapshots, 1 to 10.
+# snapshot_every = 5
 # Without "input", ffmpeg sends a test pattern and a tone: handy for a first
 # run. A USB camera on macOS, for example:
 #   input = ["-f", "avfoundation", "-framerate", "30", "-video_size", "1280x720", "-i", "0:0"]
