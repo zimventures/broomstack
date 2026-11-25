@@ -59,6 +59,10 @@ def main(argv=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # Shutting down: a Ctrl-C reaches ffmpeg too, and its exit isn't a
+        # failure to tell the facility's admins about (code review on PR #2).
+        for worker in receiver.workers.values():
+            worker.pusher.on_exit = lambda why: None
         for worker in receiver.workers.values():
             try:
                 worker.pusher.stop()

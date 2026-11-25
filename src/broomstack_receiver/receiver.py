@@ -58,8 +58,10 @@ class SheetWorker:
         self.pusher = pusher
         self.on_failure = on_failure
         self.last = None  # occurred_at of the last event acted on
-        #: Where to report a failure of the current push (the start's
-        #: stream.report_url), or None between games.
+        #: Where to report a failure of the push now running: set on this
+        #: worker's own thread just before that push starts, cleared when it
+        #: stops. Never the next game's, which may be waiting in the queue
+        #: (code review on PR #2).
         self.report_url = None
         # A push that dies on its own, mid-game, is a failure too.
         pusher.on_exit = lambda why: on_failure(label, why)
@@ -68,6 +70,17 @@ class SheetWorker:
 
     def submit(self, action, *args):
         self._queue.put((action, args))
+
+    def start(self, report_url, ingest_url, stream_key):
+        """Queued: start a push, and from then on report its failures to
+        the start that asked for it."""
+        self.report_url = report_url
+        self.pusher.start(ingest_url, stream_key)
+
+    def stop(self):
+        """Queued: stop the push; nothing to report to until the next."""
+        self.report_url = None
+        self.pusher.stop()
 
     def drain(self):
         """Wait until everything submitted so far has run (tests, shutdown)."""
@@ -141,8 +154,7 @@ class Receiver:
 
         if event == 'game.finished':
             worker.last = when or worker.last
-            worker.report_url = None
-            worker.submit(worker.pusher.stop)
+            worker.submit(worker.stop)
             logger.info('Sheet %s: game finished, stopping', sheet)
             return Outcome(200, 'stopping')
 
@@ -151,7 +163,7 @@ class Receiver:
             # No broadcast for this game: nothing to push to. Stop a push
             # left over from a game whose finish never arrived.
             worker.last = when or worker.last
-            worker.submit(worker.pusher.stop)
+            worker.submit(worker.stop)
             logger.info('Sheet %s: %s without a stream, not pushing', sheet, event)
             return Outcome(200, 'no stream to push')
 
@@ -161,8 +173,8 @@ class Receiver:
             return Outcome(503, f'cannot stream: {problem}')
 
         worker.last = when or worker.last
-        worker.report_url = (payload.get('stream') or {}).get('report_url') or None
-        worker.submit(worker.pusher.start, *target)
+        report_url = (payload.get('stream') or {}).get('report_url') or None
+        worker.submit(worker.start, report_url, *target)
         part = (payload.get('stream') or {}).get('part')
         logger.info('Sheet %s: %s, pushing part %s', sheet, event, part)
         return Outcome(202, 'starting')

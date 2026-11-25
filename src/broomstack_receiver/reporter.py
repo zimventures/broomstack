@@ -63,7 +63,9 @@ def send(report_url, secret, message, *, opener=urllib.request.urlopen, wait=tim
                 status = response.status
         except urllib.error.HTTPError as error:
             status = error.code
-        except (urllib.error.URLError, OSError) as error:
+        except Exception as error:  # noqa: BLE001 - any failure: try again, quietly
+            # Network errors, a garbled answer (http.client's errors aren't
+            # OSErrors), a malformed URL: logged by type only, never text.
             logger.warning('Report not sent (try %s): %s', attempt, type(error).__name__)
             status = None
         if status is not None and status < 500:
@@ -75,6 +77,9 @@ def send(report_url, secret, message, *, opener=urllib.request.urlopen, wait=tim
 
 
 def send_later(report_url, secret, message):
+    """Send on a thread of its own. A daemon: a report still being tried
+    when the receiver shuts down is dropped, which is acceptable for a
+    failure the stream's own status will show anyway."""
     threading.Thread(
         target=send, args=(report_url, secret, message), name='report', daemon=True
     ).start()

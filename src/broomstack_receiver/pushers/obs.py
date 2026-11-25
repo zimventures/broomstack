@@ -11,6 +11,10 @@ Needs ``pip install 'broomstack-receiver[obs]'`` (obsws-python). In OBS:
 Tools > WebSocket Server Settings > Enable, and set a password.
 
 **Not yet tried against a live OBS by the maintainers.** Reports welcome.
+
+A start OBS refuses is reported to Broomstack; a stream OBS drops after it
+started isn't watched for yet, so it isn't (Broomstack still notices one
+that never goes live).
 """
 
 import logging

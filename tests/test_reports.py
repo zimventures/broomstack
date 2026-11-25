@@ -117,6 +117,68 @@ def test_ffmpeg_ending_on_its_own_is_reported_but_a_stop_is_not(tmp_path):
     stopped_exits = []
     stopped.on_exit = stopped_exits.append
     stopped.start('rtmp://x/live2', 'KEY')
+    process = stopped._process
     stopped.stop()
-    time.sleep(0.3)
+    process.wait(timeout=5)  # the relay's own wait has returned too, or is about to
+    time.sleep(0.2)
     assert stopped_exits == []
+
+
+def test_a_failure_goes_to_its_own_starts_url_not_the_next_ones(start_payload, monkeypatch):
+    """Part 1 fails while part 2's restart waits in the queue: part 1's URL."""
+    import copy
+    import threading
+
+    sent = []
+    monkeypatch.setattr(reporter, 'send_later', lambda url, secret, why: sent.append(url))
+    gate = threading.Event()
+
+    class SlowFailing(FakePusher):
+        def start(self, ingest_url, stream_key):
+            gate.wait(5)
+            raise RuntimeError('OBS refused the stream')
+
+    receiver = Receiver({'A': SlowFailing()}, seen=Seen(), secret='whsec')
+    first = copy.deepcopy(start_payload)
+    first['stream']['report_url'] = 'https://b.example/api/streams/1/report/'
+    receiver.receive('1', first)
+    second = copy.deepcopy(start_payload)
+    second['event'] = 'stream.restart'
+    second['occurred_at'] = '2026-11-24T23:30:00+00:00'
+    second['stream']['report_url'] = 'https://b.example/api/streams/2/report/'
+    receiver.receive('2', second)
+    gate.set()
+    receiver.workers['A'].drain()
+    assert sent[0] == 'https://b.example/api/streams/1/report/'
+
+
+def test_ffmpeg_dying_is_reported_through_the_sheet_to_its_url(start_payload, monkeypatch, tmp_path):
+    import stat
+    import sys
+
+    from broomstack_receiver.pushers.ffmpeg import FfmpegPusher
+
+    sent = []
+    monkeypatch.setattr(reporter, 'send_later', lambda url, secret, why: sent.append((url, why)))
+    quits = tmp_path / 'ffmpeg'
+    quits.write_text(f'#!{sys.executable}\nimport sys, time\ntime.sleep(0.3)\nsys.exit(1)\n')
+    quits.chmod(quits.stat().st_mode | stat.S_IEXEC)
+    receiver = Receiver(
+        {'A': FfmpegPusher({'ffmpeg': str(quits)}, label='A', state_dir=str(tmp_path))},
+        seen=Seen(),
+        secret='whsec',
+    )
+    start_payload['stream']['report_url'] = 'https://b.example/api/streams/40/report/'
+    receiver.receive('1', start_payload)
+    receiver.workers['A'].drain()
+    deadline = time.time() + 5
+    while not sent and time.time() < deadline:
+        time.sleep(0.05)
+    assert sent == [('https://b.example/api/streams/40/report/', 'ffmpeg stopped unexpectedly (exit 1)')]
+
+
+def test_a_garbled_answer_is_retried_not_dropped():
+    import http.client
+
+    opener = Opener(http.client.BadStatusLine('x'), 200)
+    assert reporter.send('https://b.example/r/', 's', 'x', opener=opener, wait=lambda s: None) == 200
