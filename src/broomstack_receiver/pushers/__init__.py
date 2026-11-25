@@ -37,13 +37,13 @@ class Pusher:
         return None
 
 
-def build(config):
+def build(config, *, label='sheet', state_dir=None):
     """The pusher a sheet's config section asks for."""
     kind = config.get('pusher', 'ffmpeg')
     if kind == 'ffmpeg':
         from .ffmpeg import FfmpegPusher
 
-        return FfmpegPusher(config)
+        return FfmpegPusher(config, label=label, state_dir=state_dir)
     if kind == 'obs':
         from .obs import ObsPusher
 

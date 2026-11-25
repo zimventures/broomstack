@@ -76,29 +76,41 @@ class ObsPusher(Pusher):
         finally:
             client.disconnect()
 
+    #: Per call during a snapshot, which Broomstack waits 10 seconds for in
+    #: all: connect plus three short requests stays well inside it.
+    SNAPSHOT_TIMEOUT = 2
+
     def snapshot(self):
-        """A screenshot of the scene on air: what the stream shows."""
+        """A screenshot of the scene on air, 1280 wide at OBS's own aspect
+        ratio. Doesn't ask whether OBS is streaming: the scene on air is the
+        frame either way, and every call spends Broomstack's 10 seconds."""
         import base64
 
+        timeout, self.timeout = self.timeout, min(self.timeout, self.SNAPSHOT_TIMEOUT)
         try:
             client = self._client()
-        except RuntimeError:
+        except Exception:  # noqa: BLE001 - OBS closed, or not installed: no frame
             return None
+        finally:
+            self.timeout = timeout
         try:
-            if not client.get_stream_status().output_active:
-                return None
+            video = client.get_video_settings()
+            width = 1280
+            height = max(2, round(width * video.base_height / video.base_width))
             scene = client.get_current_program_scene()
             name = getattr(scene, 'current_program_scene_name', None) or getattr(
                 scene, 'scene_name', None
             )
-            shot = client.get_source_screenshot(name, 'jpg', 1280, 720, 80)
+            shot = client.get_source_screenshot(name, 'jpg', width, height, 80)
             data = getattr(shot, 'image_data', '') or ''
             data = base64.b64decode(data.split(',', 1)[-1])
         except Exception:  # noqa: BLE001 - no frame is an answer, not a crash
             return None
         finally:
             client.disconnect()
-        if not data.startswith(b'\xff\xd8\xff') or len(data) > 2 * 1024 * 1024:
+        if not data.startswith(b'\xff\xd8\xff') or not data.endswith(b'\xff\xd9'):
+            return None
+        if len(data) > 2 * 1024 * 1024:
             return None
         return 'image/jpeg', data
 

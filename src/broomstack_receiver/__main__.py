@@ -42,7 +42,10 @@ def main(argv=None):
     config, secret, sheets = load(args.config)
     state = config.get('state_dir', 'state')
     receiver = Receiver(
-        {str(label): pushers.build(section) for label, section in sheets.items()},
+        {
+            str(label): pushers.build(section, label=label, state_dir=state)
+            for label, section in sheets.items()
+        },
         seen=Seen(os.path.join(state, 'seen.json')),
     )
     host, _, port = str(config.get('listen', '127.0.0.1:8800')).rpartition(':')

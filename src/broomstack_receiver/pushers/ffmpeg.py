@@ -33,8 +33,12 @@ DEFAULT_OUTPUT = [
 ]
 
 
-#: How often the push also writes a frame for scoreboard snapshots, seconds.
+#: How often the push also writes a frame for scoreboard snapshots, seconds:
+#: 1 to 10. A frame older than three of these isn't offered.
 SNAPSHOT_EVERY = 5
+MAX_SNAPSHOT_EVERY = 10
+MAX_FRAME = 2 * 1024 * 1024
+JPEG_START, JPEG_END = b'\xff\xd8\xff', b'\xff\xd9'
 
 
 class FfmpegPusher(Pusher):
@@ -45,14 +49,28 @@ class FfmpegPusher(Pusher):
 
     name = 'ffmpeg'
 
-    def __init__(self, config):
+    def __init__(self, config, *, label='sheet', state_dir=None):
         self.binary = config.get('ffmpeg', 'ffmpeg')
         self.input = list(config.get('input', TEST_INPUT))
         self.output = list(config.get('output', DEFAULT_OUTPUT))
-        self.snapshot_every = int(config.get('snapshot_every', SNAPSHOT_EVERY))
-        self.snapshot_path = os.path.join(
-            tempfile.mkdtemp(prefix='broomstack-frame-'), 'frame.jpg'
+        every = config.get('snapshot_every', SNAPSHOT_EVERY)
+        if not isinstance(every, int) or not 1 <= every <= MAX_SNAPSHOT_EVERY:
+            # fps=1/0 would stop the push itself, not just the frames.
+            raise ValueError(
+                f'snapshot_every must be a whole number of seconds, 1 to {MAX_SNAPSHOT_EVERY}'
+            )
+        self.snapshot_every = every
+        # A directory the receiver owns (under state_dir), made again before
+        # every push: if the frame output can't write, ffmpeg stops the
+        # whole process, push and all (code review on PR #1).
+        safe = ''.join(c if c.isalnum() else '-' for c in str(label)) or 'sheet'
+        self.frame_dir = os.path.join(
+            state_dir or os.path.join(tempfile.gettempdir(), 'broomstack-receiver'),
+            'frames',
+            safe,
         )
+        self.snapshot_path = os.path.join(self.frame_dir, 'frame.jpg')
+        self._last_frame = None  # (time read, bytes): the last whole frame
         self._process = None
         self._lock = threading.Lock()
 
@@ -77,6 +95,8 @@ class FfmpegPusher(Pusher):
         secrets.remember(stream_key)
         with self._lock:
             self._stop_locked()
+            os.makedirs(self.frame_dir, exist_ok=True)
+            self._last_frame = None
             try:
                 self._process = subprocess.Popen(
                     self.command(ingest_url, stream_key),
@@ -115,20 +135,27 @@ class FfmpegPusher(Pusher):
         logger.info('ffmpeg stopped')
 
     def running(self):
-        return self._process is not None and self._process.poll() is None
+        process = self._process  # read once: stop() can clear it meanwhile
+        return process is not None and process.poll() is None
 
     def snapshot(self):
-        """The latest frame the push wrote, if it's recent; else ``None``."""
+        """The latest whole frame the push wrote, if it's recent; else
+        ``None``. ffmpeg rewrites the file in place, so a read can land
+        mid-write: then the last whole frame is offered, if still fresh."""
         if not self.running():
             return None
+        limit = 3 * self.snapshot_every
+        now = time.time()
         try:
-            age = time.time() - os.path.getmtime(self.snapshot_path)
-            if age > max(3 * self.snapshot_every, 15):
-                return None
-            with open(self.snapshot_path, 'rb') as handle:
-                data = handle.read(2 * 1024 * 1024 + 1)
+            if now - os.path.getmtime(self.snapshot_path) <= limit:
+                with open(self.snapshot_path, 'rb') as handle:
+                    data = handle.read(MAX_FRAME + 1)
+                if data.startswith(JPEG_START) and data.endswith(JPEG_END) and len(data) <= MAX_FRAME:
+                    self._last_frame = (now, data)
+                    return 'image/jpeg', data
         except OSError:
-            return None
-        if not data.startswith(b'\xff\xd8\xff') or len(data) > 2 * 1024 * 1024:
-            return None  # mid-write, or not what we asked ffmpeg for
-        return 'image/jpeg', data
+            pass
+        last = self._last_frame
+        if last is not None and now - last[0] <= limit:
+            return 'image/jpeg', last[1]
+        return None

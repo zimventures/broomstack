@@ -68,13 +68,13 @@ Run it as a service (launchd, systemd, or a scheduled task on Windows) so it sta
 
 ## Pushers
 
-**ffmpeg** reads the `input` you give it (see the example config for macOS, Linux and Windows cameras) and encodes what YouTube asks for: H.264 and AAC in FLV, with a keyframe every two seconds. Override `output` to change the bitrate. The same ffmpeg also writes a frame every `snapshot_every` seconds (default 5) for scoreboard snapshots, so the camera is never opened twice.
+**ffmpeg** reads the `input` you give it (see the example config for macOS, Linux and Windows cameras) and encodes what YouTube asks for: H.264 and AAC in FLV, with a keyframe every two seconds. Override `output` to change the bitrate. The same ffmpeg also writes a frame every `snapshot_every` seconds (1 to 10, default 5) for scoreboard snapshots, so the camera is never opened twice. The frame goes under `state_dir`. If ffmpeg can't write it, ffmpeg stops the push too, so keep `state_dir` on a disk with room and out of anything that cleans temporary files.
 
 **OBS** sets OBS's stream service to the ingest URL and key Broomstack gives it, then starts streaming. Your scenes, camera and browser sources stay as you set them up. A scoreboard snapshot is a screenshot of the scene on air. Turn on OBS's WebSocket server (Tools → WebSocket Server Settings) and give the receiver its password.
 
 OBS saves stream settings, the key included, in its profile on disk. That's OBS's file, not this receiver's, so protect the PC accordingly.
 
-**Your own:** subclass `broomstack_receiver.pushers.Pusher` and implement `check`, `start`, `stop` and `running`, and `snapshot` for live scoring. `start` is handed the stream key: don't log it, don't put it in an exception message, and don't write it anywhere of your own.
+**Your own:** subclass `broomstack_receiver.pushers.Pusher` and implement `check`, `start`, `stop` and `running`, and optionally `snapshot` for live scoring (the base class answers "no frame"). `start` is handed the stream key: don't log it, don't put it in an exception message, and don't write it anywhere of your own.
 
 ## Not yet
 
