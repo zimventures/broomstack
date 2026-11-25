@@ -62,6 +62,10 @@ def main(argv=None):
         # Shutting down: no queued start may run after its sheet is stopped,
         # and a Ctrl-C reaching ffmpeg isn't a failure to report.
         receiver.closing.set()
+        # Let a start already under way finish, so the stop below catches
+        # its ffmpeg rather than leaving it pushing past the receiver.
+        for worker in receiver.workers.values():
+            worker.drain()
         for worker in receiver.workers.values():
             try:
                 worker.pusher.stop()

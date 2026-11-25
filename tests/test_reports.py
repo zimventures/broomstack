@@ -212,3 +212,47 @@ def test_shutting_down_runs_nothing_queued_and_reports_nothing(start_payload, mo
     assert pusher.calls == []  # the queued start never ran
     receiver.report_failure('A', 'killed by Ctrl-C', 'https://b.example/r/')
     assert sent == []
+
+
+def test_a_custom_two_argument_on_failure_still_hears_of_an_ffmpeg_death(tmp_path):
+    """The documented on_failure(sheet, why) form (code review on PR #2)."""
+    import stat
+    import sys
+
+    from broomstack_receiver.pushers.ffmpeg import FfmpegPusher
+
+    heard = []
+    quits = tmp_path / 'ffmpeg'
+    quits.write_text(f'#!{sys.executable}\nimport sys, time\ntime.sleep(0.2)\nsys.exit(1)\n')
+    quits.chmod(quits.stat().st_mode | stat.S_IEXEC)
+    receiver = Receiver(
+        {'A': FfmpegPusher({'ffmpeg': str(quits)}, label='A', state_dir=str(tmp_path))},
+        seen=Seen(),
+        on_failure=lambda sheet, why: heard.append((sheet, why)),
+    )
+    receiver.workers['A'].start('https://b.example/r/', 'rtmp://x', 'KEY')
+    deadline = time.time() + 5
+    while not heard and time.time() < deadline:
+        time.sleep(0.05)
+    assert heard == [('A', 'ffmpeg stopped unexpectedly (exit 1)')]
+
+
+def test_a_push_keeps_the_callback_it_started_with(tmp_path):
+    """Game 2's start replaces on_exit before it stops game 1's ffmpeg."""
+    import stat
+    import sys
+
+    from broomstack_receiver.pushers.ffmpeg import FfmpegPusher
+
+    quits = tmp_path / 'ffmpeg'
+    quits.write_text(f'#!{sys.executable}\nimport sys, time\ntime.sleep(0.3)\nsys.exit(1)\n')
+    quits.chmod(quits.stat().st_mode | stat.S_IEXEC)
+    pusher = FfmpegPusher({'ffmpeg': str(quits)}, state_dir=str(tmp_path))
+    game1, game2 = [], []
+    pusher.on_exit = game1.append
+    pusher.start('rtmp://x', 'KEY')
+    pusher.on_exit = game2.append  # game 2's start, before stopping game 1
+    deadline = time.time() + 5
+    while not game1 and time.time() < deadline:
+        time.sleep(0.05)
+    assert game1 and game2 == []

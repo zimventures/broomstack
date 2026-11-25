@@ -104,7 +104,7 @@ class SheetWorker:
             except Exception as error:  # noqa: BLE001 - one bad push mustn't stop the sheet
                 why = secrets.scrub(str(error))
                 logger.error('Sheet %s: %s', self.label, why)
-                self.on_failure(self.label, why)
+                self.on_failure(self.label, why, self.report_url)
             finally:
                 self._queue.task_done()
 
@@ -115,8 +115,14 @@ class Receiver:
         ``secret`` signs failure reports to Broomstack."""
         self.seen = seen if seen is not None else Seen()
         self.secret = secret
-        self.on_failure = on_failure or self.report_failure
         self.closing = threading.Event()
+        # Workers call (sheet, why, url). A custom ``on_failure`` keeps the
+        # documented two-argument form; only our own reporting needs the URL
+        # (code review on PR #2).
+        if on_failure is None:
+            self.on_failure = self.report_failure
+        else:
+            self.on_failure = lambda sheet, why, url=None: on_failure(sheet, why)
         self.workers = {
             label: SheetWorker(label, pusher, self.on_failure, self.closing)
             for label, pusher in pushers.items()
